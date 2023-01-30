@@ -704,9 +704,7 @@ Using grid tuning I was able to find the maximum accuracy of using Knn with kmax
 
 The Titanic Dataset is a very famous Keggle dataset, because it is not a very complex dataset to work with for students. However, I was suprised the effort required to even clean, process, analyze this dataset. In the clean up stage, it was interesting to realize the ratio of men to women losing their lives in this tragedy. As it was portrayed in the Titanic movie by James Cameron, the women and children were boarded to rescue vessels first before all man. In addition, it was suprisng that I couldn't achieve an accuracy above 90%. Even using grid tuning, hyper parameter tuning, I was able to reach a maximum accuracy of 0.8320 using Decision Tree training model.
 
-### Reflection
 
-This course has been one of the best classes I have taken so far in my education life. Having a bachelors degree in engineering, I have never been exposed to data science part of programming, and this class has been a great tool to learn from basics to advanced clustering/classification methods. The fact that the tutorials are provided and reviewed each week, and being able to implement the taught course material on real life data has been great to practice and understand the concepts better. I have learned a lot while completing the homework. Before this class, I thought that Machine Learning was a very hard topic to grasp and learn, however this course changed my perspective in many fields such as how I look at data, how vital it is in our society, data gathering, the importance of data bias and cleaning, preprocessing methods, different ML models that have amazing mathematics behind. In addition, I was not only been able to improve myself in the field of data science, but also have learned R programming language with it. 
 
 
 
