@@ -1,0 +1,718 @@
+---
+title: "Can Dai - HW4"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+date: '2022-05-25'
+---
+
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+## HW5
+
+Libraries used for this assignment:
+
+```{r message=FALSE}
+library(tidyverse)
+library(caret)
+library(e1071)
+library(ggplot2)
+library(stats) 
+library(factoextra)
+library(cluster)
+library(rpart)
+library(kknn)
+library(pROC)
+library(readr)
+
+set.seed(123)
+
+```
+
+### Data gathering and integration
+
+For this assignment, I chose to use Titanic - Machine Learning from Disaster Dataset from Keggle (https://www.kaggle.com/competitions/titanic/data). I used the Training set for the machine learning model and testing, since the seperate testing set doesn't include the right predictions to compare the outcome of the predictions.
+
+The data set consists of both categorical and numeric variables. Only the training dataset has the determined survival ordinal variable, 0 = No, 1 = Yes. In addition, The dataset have the following attributes: Name (name of the passenger: char), Sex (male or female: char), Ticket (ticket number: char), Cabin (cabin number), Embarked (Port of embarkation: C= Cherbourg, Q= Queenstown, S= Southampton: char), PassengerId (unique ID assigned: dbl), Pclass (Ticket class, 1= 1st, 2= 2nd, 3= 3rd: dbl), Age (age of the passenger: dbl), SibSp (# of siblings/spouses aboard: dbl), Parch (# of parents/children aboard: dbl) and Fare (passanger fare: dbl). 
+
+The aim of this dataset is to train a ML model using the training set that can predict the outcome of passengers.
+
+```{r}
+
+titanic_train <- read_csv("/Users/candai/Desktop/Fundamentals of Data Science/HW5_Titanic/train.csv")
+
+head(titanic_train)
+str(titanic_train)
+
+```
+
+```{r}
+summary(titanic_train)
+
+```
+
+### Data Exploration, Cleaning, and Visualization
+
+As we look at the missing value count table for Training Data, we see that there are 177 Age, 687 Cabin and 2 Embarked missing values.For the Test data, there are 86 Age, 1 Fare, 327 Cabin missing values. For the Cabin entries, most reasonable thing to do in a case like this is to remove the column because of the high number of NA values, the number of total rows is 891 for training, NA values of 687 is quite high and replacing it with a mode or median is not logical this case. Therefore the best case scenario is to remove the Cabin column.
+
+For the missing Embarked entries in training set, I decided to use the most common Embarking location (mode) and replace the missing values with that, because I think this is the most reasonable choice to choose from the embarked locations.
+
+For the missing fare entry in testing dataset, I decided to replace this NA value with the median value of fares. The 3rd quartile of the fare data is less than the mean, for this reason we can conclude that most of the fare values are less than the mean, therefore it is more logical to use the median instead of the mean.
+
+In addition, I will replace the missing Age values  with their mean.
+
+```{r}
+#finding Na values
+colSums(is.na(titanic_train))
+
+#mode function
+getmode <- function(v) {
+   uniqv <- unique(v)
+   uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+
+# remove Cabin column 
+titanic_train <- titanic_train %>% select(-c("Cabin"))
+
+#replace NA Embarked in training dataset with mode
+mode_embarked_train = getmode(titanic_train$Embarked)
+titanic_train$Embarked[is.na(titanic_train$Embarked)==TRUE] <- "S"
+print(mode_embarked_train)
+
+#replace the NA Fare in dataset with median 
+titanic_train$Fare[is.na(titanic_train$Fare)] = median(titanic_train$Fare, na.rm = TRUE)
+
+#replace all NA Age values with their mean
+titanic_train$Age[is.na(titanic_train$Age)] = median(titanic_train$Age, na.rm = TRUE)
+
+```
+
+In addition to cleaning of the dataset, I believe adding additional attributes using the existing attributes is a good way to enhance the decision making process of our model. For this reason, I decided to add a column of age groups, which labels the entries regarding their age group into 5 categories such as children, teenager, young adult, middle_age, and old.
+
+Also we can try to conclude the marrital_state of entries using their names: Master (referred to men younger than 18 - not married), Miss (referred to women younger than 18 - not married), Ms. (not married women), Mrs. (married women). The use of Mr is a little complicated. Since mr is referred to men who are older than 18, it is not for sure that these men are married or not. For this case, I will assume that all Mr's are married. All the other prefixes will be ignored and the marital_state will be set to unknown.
+
+```{r}
+# For Training Dataset
+# Marital_Status attribute addition
+titanic_train$Prefix <- str_extract(string = titanic_train$Name, 
+                                    pattern = "(Mr|Master|Mrs|Miss|Ms|Col|Don|Sir|Rev|Capt|Dr|Major|Lady|Countess)\\.")
+titanic_train$Prefix[is.na(titanic_train$Prefix)==TRUE] <- "unkown"
+
+titanic_train$Marital_State <- ifelse(titanic_train$Prefix %in% c("Mr.", "Mrs.", "Countess."), "Married",
+                               ifelse(titanic_train$Prefix %in% c("Miss.", "Ms.", "Master."), "Not-Married",
+                               "Unknown"))
+
+# Age Grouping
+titanic_train$Age_Group <- ifelse(titanic_train$Age<=10, "Child",
+                           ifelse(titanic_train$Age>=10 & titanic_train$Age<20, "Teenager",
+                           ifelse(titanic_train$Age>=20 & titanic_train$Age<40, "Young-Adult",
+                           ifelse(titanic_train$Age>=40 & titanic_train$Age<60, "Middle-Age-Adult",
+                           "Old-Adult"))))
+
+```
+
+Moreover, there are some irrelevant attributes in the dataset such as the parch which indicates the number of parents/children aboard, name and ticket number. These attributes are irrelevant to the model and therefore will be removed from the dataset.
+
+```{r}
+#remove parch, name and ticket attributes from dataset
+titanic_train <- titanic_train %>% select(-c("Name", "Ticket", "Parch"))
+
+```
+
+Now, lets try to visualize and analyze the relationships between pairs of variables.
+
+```{r}
+########### PLOTS
+# sex vs survived stack bar graph (age_group) 
+g1 <- ggplot(titanic_train, aes(x= Sex, fill= Age_Group))
+g1 + geom_bar(position="stack")+ ggtitle("G1: Sex Distribution Onboard by Age_Group Plot")
+```
+
+The graph above shows the sex distribution onbord the ship with a fill of age groups. Number of females is almost the half of number of male passangers. In both sexes, the number of young-adult (20<age<40) is higher than the sum of number of other age groups. Middle age adults of ages between 40 and 60 are higher in males than women. There close to 600 males and 300 women onboard Titanic.
+
+```{r}
+# age_group vs survived
+g2 <- ggplot(titanic_train, aes(x= Survived, y= Sex, fill= Age_Group))
+g2 + geom_violin()+ ggtitle("G2: Survived Sex Distribution by Age_Group Plot")
+```
+G2 plot is a violin graph. This graph type is very useful in our case since there are two opposite outcomes of survival (either 1 or 0). The G2 grpah shows the distubution of sexes by age groups. Starting with males, we see that the number of females that survived are greater than that of men. Most of the men couldn't survive. In addition, the highest number of survival is for women in young-adult, teenager, and middle-age-adult. As it was shown in the famous movie Titanic, when the emergency evacuations started, the first ones to be offloaded to espace vessels were women and children. In males, the highest number of survival is in children. The above table proves this point.
+
+
+```{r}
+# prefix vs survived
+g3 <- ggplot(titanic_train, aes(x= Marital_State, y= Prefix, fill= Survived))
+g3 + geom_col()+ ggtitle("G3: Survived Prefix Distribution by Marital_State Plot")
+```
+G3 plot shows the Distribution of Prefix vs Marital_State grouped by Survival. Most number of deaths are shown in married people, and the highest number of survival is in not-married category. This is interesting since you would expect married men to secure a place on the boats for their wives, but this is not the case.
+
+
+```{r}
+# pclass vs survived (age_group)
+g4 <- ggplot(titanic_train, aes(x= Pclass, y = Survived, fill= Age_Group))
+g4 + geom_col()+ ggtitle("G4: Survived Pclass Distribution by Age_Group Plot")
+```
+Figure G4 shows the Survived Pclass distribution. Pclass is also an socio-economic measurement for the data. Pclass1 corresponds to 1st class. The highest number of people surviving is in Pclass 1 with majority are young-adults. This is the case in all Pclasses. The middle-age-adults are the second highest compared to number of other survuved classes.
+
+```{r}
+# Fare vs survived stack bar (sex)
+g5 <- ggplot(titanic_train, aes(x= Fare, y = Survived, fill = Sex))
+g5 + geom_violin(position = "dodge")+ ggtitle("G5: Fare vs Survived Plot by Sex")+ facet_wrap(~Sex)
+```
+The violin graph of G5 shows the Fare vs Survived plot grouped by sex. This chart is insightful since it clearly shows that while women from all fare ranges have survived, only the men of fares between 200-300 have survived. Men from all fare levels have died, while the women of fares 150 and 350 couldn't survive. This is another example showing that most of the surviving people are women.
+
+```{r}
+# embarked vs survived 
+g6 <- ggplot(titanic_train, aes(x= Survived, y = Embarked, fill = Sex))
+g6 + geom_violin()+ ggtitle("G6: Embarked vs Survived Plot by Sex") 
+```
+The final plot of G6 displays the Embarked locations and survival in a violin graph. Overall, the highest number of survivals have been from Q Embarkment, then C, and finally B. Most of the survivals are again women. Most non-survivals are from Embarkments S and Q. Least number of death of women and men is from Embarkment C.
+
+
+### Data Preprocessing
+
+In this part, I will create dummy variables for the categorical attributes such as:
+1. Sex
+2. Embarked
+3. Marital_State
+4. Age_Group
+5. Prefix
+
+```{r}
+########## Dummy variables: Sex, Embarked, Marutal_State, Age_Group, Prefix 
+library(caret)
+############ For Training Dataset
+#categorical values: Sex, Embarked, Martial_State, Age_Group, Prefix
+#numerical values: PassangerId, Survived, Pclass, Age, SibSp, Fare
+PassangerId = titanic_train$PassengerId
+Survived = titanic_train$Survived
+Pclass = titanic_train$Pclass
+Age = titanic_train$Age
+SibSp = titanic_train$SibSp
+Fare = titanic_train$Fare
+
+#dummyVars(~gender, data= ...) => dummies only gender
+#dummyVars( gender ~., data = ...) => exludes gender
+dummies <- dummyVars(~Sex + Embarked + Marital_State + Age_Group + Prefix, data = titanic_train)
+
+titanic_train_dummy <- as.data.frame(predict(dummies, newdata = titanic_train))
+#head(titanic_train_dummy)
+
+#insert #numerical values: PassangerId, Survived, Pclass, Age, SibSp, Fare back to titani_train_dummy
+titanic_train_dummy$PassengerId = PassangerId 
+titanic_train_dummy$Survived = Survived
+titanic_train_dummy$Pclass = Pclass
+titanic_train_dummy$Age = Age
+titanic_train_dummy$SibSp = SibSp
+titanic_train_dummy$Fare = Fare
+
+head(titanic_train_dummy)
+
+```
+
+Now the whole data is numerical, and easier to work with, especially using PCA.
+
+```{r}
+titanic_train_dummy <- titanic_train_dummy %>% select(-c("PassengerId"))
+```
+
+### Data Clustering using Kmeans and PCA
+
+For the data clustering part of the assignment, I decided to use K means since the method is less computationally intensive and more suited for large datasets. I created both the kmeans plot to find the knee (best k value) and the silhouette scores. I decided to go with 9 clusters since it has the maximum silhouette score. After that I used PCA projection to color and visualize the points by cluster assignment based on Survival data. Survived 1 shows in blue and 0 shows red (Not survived).
+
+```{r}
+########## KMEANS
+
+predictors <- titanic_train_dummy %>% select(-c("Survived"))
+
+#Normalize Data
+# Center scale allows us to standardize the data
+preproc_kmeans <- preProcess(predictors, method=c("center", "scale"))
+# We have to call predict to fit our data based on preprocessing
+predictors <- predict(preproc_kmeans, predictors)
+
+# Find the knee
+fviz_nbclust(predictors, kmeans, method = "wss")
+
+# compare average silhouette scores of different K values
+fviz_nbclust(predictors, kmeans, method = "silhouette")
+ 
+# Fit the data
+fit <- kmeans(predictors, centers = 9, nstart = 25)
+# Display the kmeans object information
+fit
+
+# Display the cluster plot
+fviz_cluster(fit, data = predictors)
+
+# Calculate PCA
+pca = prcomp(predictors)
+# Save as dataframe
+rotated_data = as.data.frame(pca$x)
+# Add original labels as a reference
+rotated_data$Survived <- titanic_train_dummy$Survived
+# Plot and color by labels
+ggplot(data = rotated_data, aes(x = PC1, y = PC2, col = Survived)) + geom_point(alpha = 0.3) + ggtitle("PCA Projection Graph")
+
+```
+
+### Data Classification using SVM and Decision Tree Models
+
+```{r}
+######################### SVM - works only with numerical variables (will use titanic_train_dummy)
+
+titanic_train_dummy$Survived = as.factor(titanic_train_dummy$Survived)
+#Evaluation method parameter
+train_control = trainControl(method = "cv", number = 10)
+# Scaling method
+preproc_svm = c("center", "scale")
+#Grid search
+grid <- expand.grid(C= 10^seq(-5,2,0.5))
+
+# Fit the model
+svm <- train(Survived ~., data = titanic_train_dummy, 
+             method = "svmLinear", trControl = train_control, tuneGrid = grid)
+
+svm
+
+################### Decision Tree
+
+# Make Valid Column Names 
+colnames(titanic_train_dummy) <- make.names(colnames(titanic_train_dummy))
+
+# First lets check the relevance score of the decision tree
+
+# BASE MODEL - Tree1: Fit the model
+tree_base <- train(Survived ~., data = titanic_train_dummy, 
+                   method = "rpart1SE", trControl = train_control)
+# View the variable importance scores
+var_imp <- varImp(tree_base, scale = FALSE)
+# Estimate variable importance
+importance <- varImp(tree_base, scale=FALSE)
+# Summarize importance
+print(importance)
+# Visualize
+plot(importance)
+
+
+# Using the scores from variable importance analysis, we can reduce the size of our table and only keep the relevant predictors. 
+decision_train_data <- titanic_train_dummy %>% select("Sexmale","Sexfemale","PrefixMr.","Marital_StateNot.Married","PrefixMrs.","Fare",
+                                                      "SibSp","Pclass","Marital_StateUnknown","EmbarkedS",
+                                                      "Age","Age_GroupMiddle.Age.Adult","EmbarkedC","PrefixDr.","PrefixMaster.", "Survived")
+head(decision_train_data)
+
+# I will use the decision_train_data dataset to create the decision tree model
+set.seed(123)
+
+# General Model Comparison & Visualization: I will create 10 different trees with different hyper parameters to test out the highest accuracy
+
+# Partition the data
+index_decision = createDataPartition(y=decision_train_data$Survived, p=0.7, list=FALSE)
+
+# Everything in the generated index list
+train_set_q3 = decision_train_data[index_decision,]
+
+# Everything except the generated indices
+test_set_q3 = decision_train_data[-index_decision,]
+# Initialize cross validation
+train_control = trainControl(method = "cv", number = 10)
+
+# Tree 1
+hypers = rpart.control(minsplit = 5, maxdepth = 1, minbucket = 5)
+tree1 <- train(Survived ~., data = train_set_q3, control = hypers,
+               trControl = train_control, method = "rpart1SE")
+
+# Training Set
+# Evaluate the fit with a confusion matrix
+pred_tree <- predict(tree1, train_set_q3)
+# Confusion Matrix
+cfm_train <- confusionMatrix(train_set_q3$Survived, pred_tree)
+
+# Test Set
+# Evaluate the fit with a confusion matrix
+pred_tree <- predict(tree1, test_set_q3)
+# Confusion Matrix
+cfm_test <- confusionMatrix(test_set_q3$Survived, pred_tree)
+
+# Get training accuracy
+a_train <- cfm_train$overall[1]
+# Get testing accuracy
+a_test <- cfm_test$overall[1]
+# Get number of nodes
+nodes <- nrow(tree1$finalModel$frame)
+
+# Form the table
+comp_tbl <- data.frame("Nodes" = nodes, "TrainAccuracy" = a_train, 
+                       "TestAccuracy" = a_test, "MaxDepth" = 1, "Minsplit" = 5, "Minbucket" = 5)
+
+######################
+
+# Tree 2
+hypers = rpart.control(minsplit = 10, maxdepth = 2, minbucket = 10)
+tree2 <- train(Survived ~., data = train_set_q3, control = hypers, 
+               trControl = train_control, method = "rpart1SE")
+
+# Training Set
+# Evaluate the fit with a confusion matrix
+pred_tree <- predict(tree2, train_set_q3)
+# Confusion Matrix
+cfm_train <- confusionMatrix(train_set_q3$Survived, pred_tree)
+
+# Test Set
+# Evaluate the fit with a confusion matrix
+pred_tree <- predict(tree2, test_set_q3)
+# Confusion Matrix
+cfm_test <- confusionMatrix(test_set_q3$Survived, pred_tree)
+
+# Get training accuracy
+a_train <- cfm_train$overall[1]
+# Get testing accuracy
+a_test <- cfm_test$overall[1]
+# Get number of nodes
+nodes <- nrow(tree2$finalModel$frame)
+
+# Add rows to the table - Make sure the order is correct
+comp_tbl <- comp_tbl %>% rbind(list(nodes, a_train, a_test, 2, 10, 10))
+
+######################
+
+# Tree 3
+hypers = rpart.control(minsplit = 30, maxdepth = 3, minbucket = 30)
+tree3 <- train(Survived ~., data = train_set_q3, control = hypers, 
+               trControl = train_control, method = "rpart1SE")
+
+# Training Set
+# Evaluate the fit with a confusion matrix
+pred_tree <- predict(tree3, train_set_q3)
+# Confusion Matrix
+cfm_train <- confusionMatrix(train_set_q3$Survived, pred_tree)
+
+# Test Set
+# Evaluate the fit with a confusion matrix
+pred_tree <- predict(tree3, test_set_q3)
+# Confusion Matrix
+cfm_test <- confusionMatrix(test_set_q3$Survived, pred_tree)
+cfm_test
+
+# Get training accuracy
+a_train <- cfm_train$overall[1]
+# Get testing accuracy
+a_test <- cfm_test$overall[1]
+# Get number of nodes
+nodes <- nrow(tree3$finalModel$frame)
+
+# Add rows to the table - Make sure the order is correct
+comp_tbl <- comp_tbl %>% rbind(list(nodes, a_train, a_test, 3, 30, 30))
+
+######################
+# Tree 4
+hypers = rpart.control(minsplit = 50, maxdepth = 3, minbucket = 50)
+tree4 <- train(Survived ~., data = train_set_q3, control = hypers, 
+               trControl = train_control, method = "rpart1SE")
+
+# Training Set
+# Evaluate the fit with a confusion matrix
+pred_tree <- predict(tree4, train_set_q3)
+# Confusion Matrix
+cfm_train <- confusionMatrix(train_set_q3$Survived, pred_tree)
+
+# Test Set
+# Evaluate the fit with a confusion matrix
+pred_tree <- predict(tree4, test_set_q3)
+# Confusion Matrix
+cfm_test <- confusionMatrix(test_set_q3$Survived, pred_tree)
+
+# Get training accuracy
+a_train <- cfm_train$overall[1]
+# Get testing accuracy
+a_test <- cfm_test$overall[1]
+# Get number of nodes
+nodes <- nrow(tree4$finalModel$frame)
+
+# Add rows to the table - Make sure the order is correct
+comp_tbl <- comp_tbl %>% rbind(list(nodes, a_train, a_test, 3, 50, 50))
+
+######################
+# Tree 5
+hypers = rpart.control(minsplit = 100, maxdepth = 3, minbucket = 100)
+tree5 <- train(Survived ~., data = train_set_q3, control = hypers, 
+               trControl = train_control, method = "rpart1SE")
+
+# Training Set
+# Evaluate the fit with a confusion matrix
+pred_tree <- predict(tree5, train_set_q3)
+# Confusion Matrix
+cfm_train_4 <- confusionMatrix(train_set_q3$Survived, pred_tree)
+
+# Test Set
+# Evaluate the fit with a confusion matrix
+pred_tree <- predict(tree5, test_set_q3)
+# Confusion Matrix
+cfm_test_4 <- confusionMatrix(test_set_q3$Survived, pred_tree)
+
+# Get training accuracy
+a_train <- cfm_train_4$overall[1]
+# Get testing accuracy
+a_test <- cfm_test_4$overall[1]
+# Get number of nodes
+nodes <- nrow(tree5$finalModel$frame)
+
+# Add rows to the table - Make sure the order is correct
+comp_tbl <- comp_tbl %>% rbind(list(nodes, a_train, a_test, 3, 100, 100))
+
+######################
+# Tree 6
+hypers = rpart.control(minsplit = 100, maxdepth = 4, minbucket = 100)
+tree6 <- train(Survived ~., data = train_set_q3, control = hypers, 
+               trControl = train_control, method = "rpart1SE")
+
+# Training Set
+# Evaluate the fit with a confusion matrix
+pred_tree <- predict(tree6, train_set_q3)
+# Confusion Matrix
+cfm_train <- confusionMatrix(train_set_q3$Survived, pred_tree)
+
+# Test Set
+# Evaluate the fit with a confusion matrix
+pred_tree <- predict(tree6, test_set_q3)
+# Confusion Matrix
+cfm_test <- confusionMatrix(test_set_q3$Survived, pred_tree)
+
+# Get training accuracy
+a_train <- cfm_train$overall[1]
+# Get testing accuracy
+a_test <- cfm_test$overall[1]
+# Get number of nodes
+nodes <- nrow(tree6$finalModel$frame)
+
+# Add rows to the table - Make sure the order is correct
+comp_tbl <- comp_tbl %>% rbind(list(nodes, a_train, a_test, 4, 100, 100))
+
+######################
+# Tree 7
+hypers = rpart.control(minsplit = 1000, maxdepth = 4, minbucket = 1000)
+tree7 <- train(Survived ~., data = train_set_q3, control = hypers, 
+               trControl = train_control, method = "rpart1SE")
+
+# Training Set
+# Evaluate the fit with a confusion matrix
+pred_tree <- predict(tree7, train_set_q3)
+# Confusion Matrix
+cfm_train <- confusionMatrix(train_set_q3$Survived, pred_tree)
+
+# Test Set
+# Evaluate the fit with a confusion matrix
+pred_tree <- predict(tree7, test_set_q3)
+# Confusion Matrix
+cfm_test <- confusionMatrix(test_set_q3$Survived, pred_tree)
+
+# Get training accuracy
+a_train <- cfm_train$overall[1]
+# Get testing accuracy
+a_test <- cfm_test$overall[1]
+# Get number of nodes
+nodes <- nrow(tree7$finalModel$frame)
+
+# Add rows to the table - Make sure the order is correct
+comp_tbl <- comp_tbl %>% rbind(list(nodes, a_train, a_test, 4, 1000, 1000))
+
+######################
+# Tree 8
+hypers = rpart.control(minsplit = 1000, maxdepth = 5, minbucket = 1000)
+tree8 <- train(Survived ~., data = train_set_q3, control = hypers, 
+               trControl = train_control, method = "rpart1SE")
+
+# Training Set
+# Evaluate the fit with a confusion matrix
+pred_tree <- predict(tree8, train_set_q3)
+# Confusion Matrix
+cfm_train <- confusionMatrix(train_set_q3$Survived, pred_tree)
+
+# Test Set
+# Evaluate the fit with a confusion matrix
+pred_tree <- predict(tree8, test_set_q3)
+# Confusion Matrix
+cfm_test <- confusionMatrix(test_set_q3$Survived, pred_tree)
+
+# Get training accuracy
+a_train <- cfm_train$overall[1]
+# Get testing accuracy
+a_test <- cfm_test$overall[1]
+# Get number of nodes
+nodes <- nrow(tree8$finalModel$frame)
+
+# Add rows to the table - Make sure the order is correct
+comp_tbl <- comp_tbl %>% rbind(list(nodes, a_train, a_test, 5, 1000, 1000))
+
+######################
+# Tree 9
+hypers = rpart.control(minsplit = 3000, maxdepth = 6, minbucket = 3000)
+tree9 <- train(Survived ~., data = train_set_q3, control = hypers, 
+               trControl = train_control, method = "rpart1SE")
+
+# Training Set
+# Evaluate the fit with a confusion matrix
+pred_tree <- predict(tree9, train_set_q3)
+# Confusion Matrix
+cfm_train <- confusionMatrix(train_set_q3$Survived, pred_tree)
+
+# Test Set
+# Evaluate the fit with a confusion matrix
+pred_tree <- predict(tree9, test_set_q3)
+# Confusion Matrix
+cfm_test <- confusionMatrix(test_set_q3$Survived, pred_tree)
+
+# Get training accuracy
+a_train <- cfm_train$overall[1]
+# Get testing accuracy
+a_test <- cfm_test$overall[1]
+# Get number of nodes
+nodes <- nrow(tree9$finalModel$frame)
+
+# Add rows to the table - Make sure the order is correct
+comp_tbl <- comp_tbl %>% rbind(list(nodes, a_train, a_test, 6, 3000, 3000))
+
+######################
+# Tree 10
+hypers = rpart.control(minsplit = 5000, maxdepth = 7, minbucket = 5000)
+tree10 <- train(Survived ~., data = train_set_q3, control = hypers, 
+                trControl = train_control, method = "rpart1SE")
+
+# Training Set
+# Evaluate the fit with a confusion matrix
+pred_tree <- predict(tree10, train_set_q3)
+# Confusion Matrix
+cfm_train <- confusionMatrix(train_set_q3$Survived, pred_tree)
+
+# Test Set
+# Evaluate the fit with a confusion matrix
+pred_tree <- predict(tree10, test_set_q3)
+# Confusion Matrix
+cfm_test <- confusionMatrix(test_set_q3$Survived, pred_tree)
+
+# Get training accuracy
+a_train <- cfm_train$overall[1]
+# Get testing accuracy
+a_test <- cfm_test$overall[1]
+# Get number of nodes
+nodes <- nrow(tree10$finalModel$frame)
+
+# Add rows to the table - Make sure the order is correct
+comp_tbl <- comp_tbl %>% rbind(list(nodes, a_train, a_test, 7, 5000, 5000))
+
+##################### VISUALS
+#table display
+comp_tbl 
+
+# Visualize with scatter plot
+ggplot(comp_tbl, aes(x=Nodes)) + geom_point(aes(y = TrainAccuracy), color = "red") + 
+  geom_point(aes(y = TestAccuracy), color="blue") + ylab("Accuracy")
+
+# Visualize with line plot
+ggplot(comp_tbl, aes(x=Nodes)) + geom_line(aes(y = TrainAccuracy), color = "red") + 
+  geom_line(aes(y = TestAccuracy), color="blue") + ylab("Accuracy")
+
+
+```
+
+With the SVM, we get the C = 0.1, Accuracy = 0.8249146 and Kappa = 0.62615970.
+
+With the optimized decision tree, we get the maximum accuracy with 7 nodes, TrainAccuracy and TestAccuracy of 0.8320, 0.8007519 respectively, using MaxDepth of 3, Minsplit of 30, and MinBucket of 30.
+
+In comparison, we see that the decision tree with 7 nodes, MaxDept =3, Minsplit=30, and MinBucket=30 has a greater training accuracy then SVM model. The Decision tree has a Kappa value of 0.5698 which is lower than that of SVM. However, it is important to state that the accuracy of both models are close. In the next section, I will use a more advanced classifier and try to enhance the model accuracy.
+
+### Data Evaluation using kNN
+
+```{r warning=FALSE}
+################### Classifier: kNN (using the tools of Week 9)
+
+# Check target class and make sure it has 2 levels -  Correct: Survived (0,1)
+str(titanic_train_dummy$Survived)
+set.seed(123)
+
+# Partition the data
+index = createDataPartition(y=titanic_train_dummy$Survived, p=0.7, list=FALSE)
+# Everything in the generated index list
+train_knn = titanic_train_dummy[index,]
+# Everything except the generated indices
+test_knn = titanic_train_dummy[-index,]
+
+# Set control parameter
+train_control = trainControl(method = "cv", number = 10)
+
+# setup a tuneGrid with the tuning parameters
+# data has to be scaled because the distance measurements are sensitive
+
+tuneGrid <- expand.grid(kmax = 3:7, kernel = c("rectangular", "cos"), 
+                        distance = 1:3) #powers of Minkowski 1 to 3
+
+kknn_fit <- train(Survived ~ ., data = train_knn, method = 'kknn', 
+                  trControl = train_control, preProcess = c('center', 'scale'), 
+                  tuneGrid = tuneGrid)
+kknn_fit
+
+# Evaluate the fit with a confusion matrix
+pred_knn <- predict(kknn_fit, test_knn)
+# Confusion Matrix
+confusionMatrix_kknn <- confusionMatrix(test_knn$Survived, pred_knn)
+confusionMatrix_kknn
+
+# Store the byClass object of confusion matrix as a dataframe
+metrics <- as.data.frame(confusionMatrix_kknn$byClass)
+
+########## ROC
+# Get class probabilities for KNN
+pred_prob <- predict(kknn_fit, test_knn, type = "prob") 
+
+# And now we can create an ROC curve for our model.
+roc_obj <- roc((test_knn$Survived), pred_prob[,1])
+ 
+plot(roc_obj, print.auc=TRUE, main= "KNN ROC")
+
+
+
+# Now let’s compare our knn model with a model of decision 
+# tree using Area Under the Curve metric from ROC Curve
+
+# I will use the best decision tree from the previous section with k - 3, maxdepth and minsplit = 30.
+tree3
+
+# Evaluate the fit with a confusion matrix
+pred_pima2 <- predict(tree3, test_knn)
+# Confusion Matrix
+confusionMatrix(test_knn$Survived, pred_pima2)
+
+# Get class probabilities for decision tree model
+pred_prob2 <- predict(tree3, test_knn, type = "prob")
+
+# And now we can create an ROC curve for our model.
+roc_obj2 <- roc((test_knn$Survived), pred_prob2[,1])
+
+plot(roc_obj2, print.auc=TRUE, main= "Decision Tree ROC")
+
+```
+```{r}
+# Getting Scoring Metrics of KNN model
+metrics
+```
+Using grid tuning I was able to find the maximum accuracy of using Knn with kmax = 6, distance = 1 and kernel = rectangular. Accuracy reported is 0.7932 with a Kappa value of 0.557. Even though the accuracy of kNN model is lower than optimized SVM and Decision Tree models in previous section, the ROC curve comparison shows that kNN model has an AUC of 0.844, while the best decision tree model that was trained in previous section has an AUC of 0.798. This is a clear indication that the kNN model is a superior model even though it has a slightly less accuracy compared to the best decision tree model.
+
+
+### Report
+
+The Titanic Dataset is a very famous Keggle dataset, because it is not a very complex dataset to work with for students. However, I was suprised the effort required to even clean, process, analyze this dataset. In the clean up stage, it was interesting to realize the ratio of men to women losing their lives in this tragedy. As it was portrayed in the Titanic movie by James Cameron, the women and children were boarded to rescue vessels first before all man. In addition, it was suprisng that I couldn't achieve an accuracy above 90%. Even using grid tuning, hyper parameter tuning, I was able to reach a maximum accuracy of 0.8320 using Decision Tree training model.
+
+### Reflection
+
+This course has been one of the best classes I have taken so far in my education life. Having a bachelors degree in engineering, I have never been exposed to data science part of programming, and this class has been a great tool to learn from basics to advanced clustering/classification methods. The fact that the tutorials are provided and reviewed each week, and being able to implement the taught course material on real life data has been great to practice and understand the concepts better. I have learned a lot while completing the homework. Before this class, I thought that Machine Learning was a very hard topic to grasp and learn, however this course changed my perspective in many fields such as how I look at data, how vital it is in our society, data gathering, the importance of data bias and cleaning, preprocessing methods, different ML models that have amazing mathematics behind. In addition, I was not only been able to improve myself in the field of data science, but also have learned R programming language with it. 
+
+
+
+
+
+
+
+
+
